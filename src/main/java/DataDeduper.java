@@ -22,7 +22,7 @@ public class DataDeduper<T extends Comparable & Serializable> {
     private List<File> sortedFiles = new ArrayList<>();
     private final String FILE_PREFIX = UUID.randomUUID().toString();
     private File tempFolderDirectory = new File("/mnt1/tmp");
-    private List<ObjectOutputStream> allStreams = new ArrayList<>();
+    private final Map<File, ObjectOutputStream> objectOutputStreamMap = new HashMap<>();
 
     private volatile State state = State.ADDING_DOCS;
     private Semaphore semaphore = new Semaphore(1);
@@ -98,6 +98,7 @@ public class DataDeduper<T extends Comparable & Serializable> {
         }
         state = State.COMPLETED;
         flushDocsToFiles();
+        cleanUpStreams();
         try {
             sortDocsInFiles();
         } catch (Exception e) {
@@ -105,6 +106,7 @@ public class DataDeduper<T extends Comparable & Serializable> {
             throw new RuntimeException(e);
         }
         cleanUpResourcesInternal(false);
+        cleanUpStreams();
     }
 
     public void cleanupResources() {
@@ -151,7 +153,7 @@ public class DataDeduper<T extends Comparable & Serializable> {
                 if (this.objectInputStream != null) {
                     this.objectInputStream.close();
                 }
-                if (currentFileIndex > sortedFiles.size()) {
+                if (currentFileIndex >= sortedFiles.size()) {
                     hasNext = false;
                     return;
                 }
@@ -170,15 +172,14 @@ public class DataDeduper<T extends Comparable & Serializable> {
                     if (!hasNext) {
                         return;
                     }
-                    byte[] bytes = (byte[]) objectInputStream.readObject();
-                    if (bytes == null || bytes.length == 0) {
+                    try {
+                        objects.add((T) objectInputStream.readObject());
+                    } catch (EOFException e) {
                         currentFileIndex++;
                         initInputStream();
                         continue;
                     }
-                    objects.add(encoderDecoder.fromByte(bytes));
                 } while (++docsAdded < batchSize);
-
             } catch (Exception e) {
                 throw new RuntimeException(e);
             }
@@ -196,31 +197,34 @@ public class DataDeduper<T extends Comparable & Serializable> {
                 File file = iterator.next();
                 Set<T> docs = new TreeSet<>();
                 try (ObjectInputStream objectInputStream = getObjectInputStreamInternal(file)) {
-                    byte[] bytes = null;
-                    do {
-                        bytes = (byte[]) objectInputStream.readObject();
-                        T t = this.encoderDecoder.fromByte(bytes);
-                        docs.add(t);
-                    } while (bytes != null);
-                }
-                try (ObjectOutputStream objectOutputStream = getObjectOutputStreamInternal(file, false)) {
-                    for (T doc : docs) {
-                        objectOutputStream.write(encoderDecoder.toByteArray(doc));
+                    T t;
+                    try {
+                        while ((t = (T) objectInputStream.readObject()) != null) {
+                            docs.add(t);
+                        }
+                    } catch (EOFException e) {
+                        //ignore
                     }
-                    objectOutputStream.flush();
                 }
+                ObjectOutputStream objectOutputStream = getObjectOutputStreamInternal(file, false);
+                for (T doc : docs) {
+                    objectOutputStream.writeObject(doc);
+                }
+                objectOutputStream.flush();
             }
         }
         _createUnifiedSortedDocs();
     }
 
     private ObjectOutputStream getObjectOutputStreamInternal(File file, boolean returnAppending) throws IOException {
-        return returnAppending ? new AppendingOutputStream(new ObjectOutputStream(new BufferedOutputStream(new FileOutputStream(file)))) :
-                new ObjectOutputStream(new BufferedOutputStream(new FileOutputStream(file)));
+        if (!returnAppending) {
+            objectOutputStreamMap.put(file, new ObjectOutputStream(new FileOutputStream(file)));
+        }
+        return objectOutputStreamMap.get(file);
     }
 
     private ObjectInputStream getObjectInputStreamInternal(File file) throws IOException {
-        return new ObjectInputStream(new BufferedInputStream(new FileInputStream(file)));
+        return new ObjectInputStream(new FileInputStream(file));
     }
 
     private void _createUnifiedSortedDocs() throws Exception {
@@ -228,32 +232,31 @@ public class DataDeduper<T extends Comparable & Serializable> {
             File outFile = createTempFile(FILE_PREFIX + "_" + entry.getKey() + "_sorted");
             sortedFiles.add(outFile);
             long docsInserted = 0;
-            try (ObjectOutputStream objectOutputStream = getObjectOutputStreamInternal(outFile, false)) {
-                Deque<File> files = entry.getValue();
-                List<ObjectInputStream> objectInputStreams = DedupUtils.transformToList(files, new Transformer<File, ObjectInputStream>() {
-                    @Override
-                    public ObjectInputStream transform(File file) throws Exception {
-                        return getObjectInputStreamInternal(file);
-                    }
-                });
-                Map<T, Integer> docsMap = new HashMap<>();
-                Set<T> docSet = new TreeSet<>();
-                int i = 0;
-                for (ObjectInputStream objectInputStream : objectInputStreams) {
-                    docSet = getNextDoc(docsMap, docSet, i, objectInputStream);
-                    i++;
+            ObjectOutputStream objectOutputStream = getObjectOutputStreamInternal(outFile, false);
+            Deque<File> files = entry.getValue();
+            List<ObjectInputStream> objectInputStreams = DedupUtils.transformToList(files, new Transformer<File, ObjectInputStream>() {
+                @Override
+                public ObjectInputStream transform(File file) throws Exception {
+                    return getObjectInputStreamInternal(file);
                 }
-                while (!docSet.isEmpty()) {
-                    T firstDoc = docSet.iterator().next();
-                    docSet.remove(firstDoc);
-                    int fileIndex = docsMap.get(firstDoc);
-                    objectOutputStream.write(encoderDecoder.toByteArray(firstDoc));
-                    docsInserted++;
-                    if (docsInserted > 10000) {
-                        objectOutputStream.flush();
-                    }
-                    docSet = getNextDoc(docsMap, docSet, fileIndex, objectInputStreams.get(fileIndex));
+            });
+            Map<T, Integer> docsMap = new HashMap<>();
+            Set<T> docSet = new TreeSet<>();
+            int i = 0;
+            for (ObjectInputStream objectInputStream : objectInputStreams) {
+                docSet = getNextDoc(docsMap, docSet, i, objectInputStream);
+                i++;
+            }
+            while (!docSet.isEmpty()) {
+                T firstDoc = docSet.iterator().next();
+                docSet.remove(firstDoc);
+                int fileIndex = docsMap.get(firstDoc);
+                objectOutputStream.writeObject(firstDoc);
+                docsInserted++;
+                if (docsInserted > 10000) {
+                    objectOutputStream.flush();
                 }
+                docSet = getNextDoc(docsMap, docSet, fileIndex, objectInputStreams.get(fileIndex));
             }
         }
     }
@@ -261,12 +264,13 @@ public class DataDeduper<T extends Comparable & Serializable> {
     private Set<T> getNextDoc(Map<T, Integer> docsMap, Set<T> docSet, int fileIndex, ObjectInputStream objectInputStream) throws IOException, ClassNotFoundException {
         T doc = null;
         do {
-            byte[] object = (byte[]) objectInputStream.readObject();
-            if (object == null) {
-                continue;
+            try {
+                doc = (T) objectInputStream.readObject();
+            } catch (EOFException e) {
+                return docSet;
             }
-            doc = encoderDecoder.fromByte(object);
         } while (docSet.contains(doc));
+        docSet.add(doc);
         docsMap.put(doc, fileIndex);
         return docSet;
     }
@@ -293,14 +297,13 @@ public class DataDeduper<T extends Comparable & Serializable> {
                 if (totalDocs == null) {
                     totalDocs = 0L;
                 }
-                try (ObjectOutputStream objectOutputStream = getObjectOutputStream(entry.getKey(), fileName, totalDocs)) {
-                    totalDocs = docsPerFile.get(fileIndex);
-                    for (byte[] objectInBytes : objectInBytesSet) {
-                        objectOutputStream.write(objectInBytes);
-                        totalDocs++;
-                    }
-                    objectOutputStream.flush();
+                ObjectOutputStream objectOutputStream = getObjectOutputStream(entry.getKey(), fileName, totalDocs);
+                totalDocs = docsPerFile.get(fileIndex);
+                for (byte[] objectInBytes : objectInBytesSet) {
+                    objectOutputStream.writeObject(encoderDecoder.fromByte(objectInBytes));
+                    totalDocs++;
                 }
+                objectOutputStream.flush();
                 docsPerFile.put(fileIndex, totalDocs);
             } catch (IOException e) {
                 throw new RuntimeException(e);
@@ -353,6 +356,19 @@ public class DataDeduper<T extends Comparable & Serializable> {
 
             }
         }
+    }
+
+    private void cleanUpStreams() {
+        for (Map.Entry<File, ObjectOutputStream> entry : this.objectOutputStreamMap.entrySet()) {
+            ObjectOutputStream stream = entry.getValue();
+            try {
+                stream.flush();
+                stream.close();
+            } catch (IOException e) {
+                e.printStackTrace();
+            }
+        }
+        this.objectOutputStreamMap.clear();
     }
 
     private enum State {
