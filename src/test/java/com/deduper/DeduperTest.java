@@ -1,3 +1,8 @@
+package com.deduper;
+
+import com.deduper.DataDeduper;
+import com.deduper.encoderdecoder.ByteEncoderDecoder;
+import com.deduper.wrapper.StringWrapper;
 import org.junit.Test;
 
 import java.io.*;
@@ -38,7 +43,7 @@ public class DeduperTest {
             }
         }
         deduper.complete();
-        Iterator<List<StringWrapper>> iterator = deduper.getIterator(10000);
+        Iterator<List<StringWrapper>> iterator = deduper.getIterator(500000);
         long totalDocs = 0l;
         while (iterator.hasNext()) {
             List<StringWrapper> next = iterator.next();
@@ -46,6 +51,24 @@ public class DeduperTest {
         }
         System.out.println(totalDocs);
         deduper.cleanupResources();
+    }
+
+    @Test
+    public void testInMemory() throws IOException {
+        File file = new File("/Users/rahulanishetty/Dev/Deduper/src/test/resources");
+        Set<StringWrapper> dataSet = new HashSet<>();
+        for (File tempFile : file.listFiles()) {
+            if (tempFile.isDirectory() || tempFile.isHidden()) {
+                continue;
+            }
+            try (BufferedReader bufferedReader = new BufferedReader(new FileReader(tempFile))) {
+                String data = null;
+                while ((data = bufferedReader.readLine()) != null) {
+                    dataSet.add(new StringWrapper(data));
+                }
+            }
+        }
+        System.out.println(dataSet.size());
     }
 
     @Test
@@ -57,35 +80,5 @@ public class DeduperTest {
             System.out.println(new String(bytes));
         }
         objectInputStream.close();
-    }
-
-    @Test
-    public void testSerializationDeserialization() throws IOException, ClassNotFoundException {
-        ByteEncoderDecoder<StringWrapper> byteEncoderDecoder = new ByteEncoderDecoder<StringWrapper>() {
-            @Override
-            public byte[] toByteArray(StringWrapper obj) {
-                return obj.getActual().getBytes(StandardCharsets.ISO_8859_1);
-            }
-
-            @Override
-            public StringWrapper fromByte(byte[] bytes) {
-                return new StringWrapper(new String(bytes, StandardCharsets.ISO_8859_1));
-            }
-        };
-        String filePath = "/Users/rahulanishetty/Dev/Deduper/temp.txt";
-        try (ObjectOutputStream outputStream = new ObjectOutputStream(new FileOutputStream("/Users/rahulanishetty/Dev/Deduper/temp.txt"))) {
-            outputStream.writeObject(new StringWrapper("abcdef"));
-            outputStream.flush();
-        }
-        try (ObjectOutputStream objectOutputStream = new AppendingOutputStream(new ObjectOutputStream(new FileOutputStream("/Users/rahulanishetty/Dev/Deduper/temp.txt")))) {
-            objectOutputStream.writeObject(new StringWrapper("deksdjfk"));
-            objectOutputStream.flush();
-        }
-
-        try (ObjectInputStream objectInputStream = new ObjectInputStream(new FileInputStream(filePath))) {
-            Object readObject = objectInputStream.readObject();
-            Object readObject1 = objectInputStream.readObject();
-            System.out.println(readObject);
-        }
     }
 }

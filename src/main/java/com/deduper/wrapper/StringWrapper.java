@@ -1,3 +1,5 @@
+package com.deduper.wrapper;
+
 import java.io.Serializable;
 
 /**

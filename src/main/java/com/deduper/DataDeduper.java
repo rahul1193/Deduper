@@ -1,3 +1,11 @@
+package com.deduper;
+
+import com.deduper.encoderdecoder.ByteEncoderDecoder;
+import com.deduper.logger.LoggerFactory;
+import com.deduper.utils.DedupUtils;
+import com.deduper.utils.Transformer;
+import org.slf4j.Logger;
+
 import java.io.*;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -13,6 +21,9 @@ public class DataDeduper<T extends Comparable & Serializable> {
     public static final int LIMIT = 100000;
     public static final int SIZE = 31;
     public static final String SUFFIX = ".dedup";
+
+    public static final Logger LOG = LoggerFactory.getLogger(DataDeduper.class);
+
     private final ConcurrentHashMap<Integer, Set<byte[]>> hashCodeVsBytesMap = new ConcurrentHashMap<>(SIZE);
     private final AtomicInteger totalDocs = new AtomicInteger(0);
     private final ByteEncoderDecoder<T> encoderDecoder;
@@ -199,6 +210,7 @@ public class DataDeduper<T extends Comparable & Serializable> {
                 try (ObjectInputStream objectInputStream = getObjectInputStreamInternal(file)) {
                     T t;
                     try {
+                        //noinspection unchecked
                         while ((t = (T) objectInputStream.readObject()) != null) {
                             docs.add(t);
                         }
@@ -211,6 +223,7 @@ public class DataDeduper<T extends Comparable & Serializable> {
                     objectOutputStream.writeObject(doc);
                 }
                 objectOutputStream.flush();
+                objectOutputStream.reset();
             }
         }
         _createUnifiedSortedDocs();
@@ -255,6 +268,9 @@ public class DataDeduper<T extends Comparable & Serializable> {
                 docsInserted++;
                 if (docsInserted > 10000) {
                     objectOutputStream.flush();
+                    objectOutputStream.reset();
+                    LOG.error("flushed objects after 10000 docs for file {}", entry.getValue());
+                    docsInserted = 0;
                 }
                 docSet = getNextDoc(docsMap, docSet, fileIndex, objectInputStreams.get(fileIndex));
             }
@@ -304,6 +320,7 @@ public class DataDeduper<T extends Comparable & Serializable> {
                     totalDocs++;
                 }
                 objectOutputStream.flush();
+                objectOutputStream.reset();
                 docsPerFile.put(fileIndex, totalDocs);
             } catch (IOException e) {
                 throw new RuntimeException(e);

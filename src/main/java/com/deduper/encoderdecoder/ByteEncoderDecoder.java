@@ -1,3 +1,5 @@
+package com.deduper.encoderdecoder;
+
 /**
  * @author rahulanishetty
  *         on 23/07/16.
