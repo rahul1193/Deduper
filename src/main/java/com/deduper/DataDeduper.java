@@ -18,7 +18,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 public class DataDeduper<T extends Comparable & Serializable> {
     public static final int PRIME = 49999;
-    public static final int LIMIT = 100000;
+    public static final int LIMIT = 1000000;
     public static final int SIZE = 31;
     public static final String SUFFIX = ".dedup";
 
@@ -129,7 +129,7 @@ public class DataDeduper<T extends Comparable & Serializable> {
     }
 
     private class DedupDataIterator implements Iterator<List<T>> {
-        private final List<T> objects;
+        private List<T> objects;
         private boolean hasNext = true;
         private ObjectInputStream objectInputStream;
         int currentFileIndex = 0;
@@ -137,19 +137,18 @@ public class DataDeduper<T extends Comparable & Serializable> {
 
         public DedupDataIterator(int batchSize) {
             this.batchSize = batchSize;
-            objects = new ArrayList<>(batchSize);
             initInputStream();
             fetchNext();
         }
 
         @Override
         public boolean hasNext() {
-            return hasNext;
+            return !(objects == null || objects.isEmpty());
         }
 
         @Override
         public List<T> next() {
-            List<T> objects = new ArrayList<>(this.objects);
+            List<T> objects = Collections.unmodifiableList(this.objects);
             fetchNext();
             return objects;
         }
@@ -178,12 +177,14 @@ public class DataDeduper<T extends Comparable & Serializable> {
         private void fetchNext() {
             try {
                 int docsAdded = 0;
-                objects.clear();
+                objects = new ArrayList<>(batchSize);
                 do {
                     if (!hasNext) {
+                        LOG.error("docs added into batch : " + docsAdded);
                         return;
                     }
                     try {
+                        //noinspection unchecked
                         objects.add((T) objectInputStream.readObject());
                     } catch (EOFException e) {
                         currentFileIndex++;
@@ -191,6 +192,7 @@ public class DataDeduper<T extends Comparable & Serializable> {
                         continue;
                     }
                 } while (++docsAdded < batchSize);
+                LOG.error("docs added into batch : " + docsAdded);
             } catch (Exception e) {
                 throw new RuntimeException(e);
             }
@@ -266,14 +268,9 @@ public class DataDeduper<T extends Comparable & Serializable> {
                 int fileIndex = docsMap.get(firstDoc);
                 objectOutputStream.writeObject(firstDoc);
                 docsInserted++;
-                if (docsInserted > 10000) {
-                    objectOutputStream.flush();
-                    objectOutputStream.reset();
-                    LOG.error("flushed objects after 10000 docs for file {}", entry.getValue());
-                    docsInserted = 0;
-                }
                 docSet = getNextDoc(docsMap, docSet, fileIndex, objectInputStreams.get(fileIndex));
             }
+            LOG.error("docs inserted for file " + docsInserted);
         }
     }
 
@@ -281,6 +278,7 @@ public class DataDeduper<T extends Comparable & Serializable> {
         T doc = null;
         do {
             try {
+                //noinspection unchecked
                 doc = (T) objectInputStream.readObject();
             } catch (EOFException e) {
                 return docSet;
@@ -301,7 +299,7 @@ public class DataDeduper<T extends Comparable & Serializable> {
     }
 
     private void flushDocsToFiles() {
-        String fileName = FILE_PREFIX + "_" + System.nanoTime();
+        String fileName = FILE_PREFIX + "_";
         for (Map.Entry<Integer, Set<byte[]>> entry : hashCodeVsBytesMap.entrySet()) {
             Set<byte[]> objectInBytesSet = entry.getValue();
             if (objectInBytesSet == null || objectInBytesSet.isEmpty()) {

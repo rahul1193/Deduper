@@ -2,8 +2,10 @@ package com.deduper;
 
 import com.deduper.DataDeduper;
 import com.deduper.encoderdecoder.ByteEncoderDecoder;
+import com.deduper.logger.LoggerFactory;
 import com.deduper.wrapper.StringWrapper;
 import org.junit.Test;
+import org.slf4j.Logger;
 
 import java.io.*;
 import java.nio.charset.StandardCharsets;
@@ -16,6 +18,8 @@ import java.util.Set;
  * authored by @rahulanishetty on 7/24/16.
  */
 public class DeduperTest {
+
+    public static final Logger LOG = LoggerFactory.getLogger(DeduperTest.class);
 
     @Test
     public void testDedup() throws IOException {
@@ -30,7 +34,7 @@ public class DeduperTest {
                 return new StringWrapper(new String(bytes, StandardCharsets.ISO_8859_1));
             }
         }, 10, "/Users/rahulanishetty/Dev/Deduper/src/test/resources/processed/");
-        File file = new File("/Users/rahulanishetty/Dev/Deduper/src/test/resources");
+        File file = new File("/Users/rahulanishetty/Dev/Deduper/src/test/resources/files");
         for (File tempFile : file.listFiles()) {
             if (tempFile.isDirectory() || tempFile.isHidden()) {
                 continue;
@@ -47,10 +51,29 @@ public class DeduperTest {
         long totalDocs = 0l;
         while (iterator.hasNext()) {
             List<StringWrapper> next = iterator.next();
+            LOG.error("size from iterator" + next.size());
             totalDocs += next.size();
         }
         System.out.println(totalDocs);
         deduper.cleanupResources();
+    }
+
+    @Test
+    public void testUniqueness() throws IOException {
+        Set<String> values = new HashSet<>();
+        File file = new File("/Users/rahulanishetty/Dev/Deduper/src/test/resources/files");
+        for (File tempFile : file.listFiles()) {
+            if (tempFile.isDirectory() || tempFile.isHidden()) {
+                continue;
+            }
+            try (BufferedReader bufferedReader = new BufferedReader(new FileReader(tempFile))) {
+                String data = null;
+                while ((data = bufferedReader.readLine()) != null) {
+                    values.add(data);
+                }
+            }
+        }
+        System.out.println(values.size());
     }
 
     @Test

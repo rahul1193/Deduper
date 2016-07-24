@@ -19,7 +19,7 @@ public class CreateTestFiles {
 
     public static void main(String[] args) throws IOException {
         for (int numberOfFiles = 0; numberOfFiles < NUMBER_OF_FILES; numberOfFiles++) {
-            File file = File.createTempFile(FILE_PREFIX + "_" + numberOfFiles, ".txt", new File("/Users/rahulanishetty/Dev/Deduper/src/test/resources/"));
+            File file = File.createTempFile(FILE_PREFIX + "_" + numberOfFiles, ".txt", new File("/Users/rahulanishetty/Dev/Deduper/src/test/resources/files/"));
             file.setWritable(true);
             writeRandomData(file);
         }
