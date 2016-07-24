@@ -14,8 +14,8 @@ import java.util.Set;
 public class CreateTestFiles {
 
     public static final String FILE_PREFIX = "000000";
-    public static final long LINES_PER_FILE = 5000000L;
-    public static final int NUMBER_OF_FILES = 1;
+    public static final long LINES_PER_FILE = 1000000L;
+    public static final int NUMBER_OF_FILES = 5;
 
     public static void main(String[] args) throws IOException {
         for (int numberOfFiles = 0; numberOfFiles < NUMBER_OF_FILES; numberOfFiles++) {
@@ -42,7 +42,7 @@ public class CreateTestFiles {
     private static long generateRandomNumber(Random random, Set<Long> docs) {
         long randomNumber;
         do {
-            randomNumber = Math.abs(random.nextLong() % ((long) (100 * LINES_PER_FILE)));
+            randomNumber = Math.abs(random.nextLong() % ((long) (5 * LINES_PER_FILE)));
         } while (docs.contains(randomNumber));
         return randomNumber;
     }

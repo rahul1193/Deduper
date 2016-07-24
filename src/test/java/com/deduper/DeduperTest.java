@@ -23,17 +23,17 @@ public class DeduperTest {
 
     @Test
     public void testDedup() throws IOException {
-        DataDeduper<StringWrapper> deduper = new DataDeduper<>(new ByteEncoderDecoder<StringWrapper>() {
+        DataDeduper<String> deduper = new DataDeduper<>(new ByteEncoderDecoder<String>() {
             @Override
-            public byte[] toByteArray(StringWrapper obj) {
-                return obj.getActual().getBytes(StandardCharsets.ISO_8859_1);
+            public byte[] toByteArray(String obj) {
+                return obj.getBytes(StandardCharsets.ISO_8859_1);
             }
 
             @Override
-            public StringWrapper fromByte(byte[] bytes) {
-                return new StringWrapper(new String(bytes, StandardCharsets.ISO_8859_1));
+            public String fromByte(byte[] bytes) {
+                return new String(bytes, StandardCharsets.ISO_8859_1);
             }
-        }, 10, "/Users/rahulanishetty/Dev/Deduper/src/test/resources/processed/");
+        }, 97, "/Users/rahulanishetty/Dev/Deduper/src/test/resources/processed/");
         File file = new File("/Users/rahulanishetty/Dev/Deduper/src/test/resources/files");
         for (File tempFile : file.listFiles()) {
             if (tempFile.isDirectory() || tempFile.isHidden()) {
@@ -42,15 +42,15 @@ public class DeduperTest {
             try (BufferedReader bufferedReader = new BufferedReader(new FileReader(tempFile))) {
                 String data = null;
                 while ((data = bufferedReader.readLine()) != null) {
-                    deduper.addDoc(new StringWrapper(data));
+                    deduper.addDoc(data);
                 }
             }
         }
         deduper.complete();
-        Iterator<List<StringWrapper>> iterator = deduper.getIterator(500000);
+        Iterator<List<String>> iterator = deduper.getIterator(500000);
         long totalDocs = 0l;
         while (iterator.hasNext()) {
-            List<StringWrapper> next = iterator.next();
+            List<String> next = iterator.next();
             LOG.error("size from iterator" + next.size());
             totalDocs += next.size();
         }
