@@ -22,6 +22,7 @@ public class DataDeduper<T extends Comparable & Serializable> {
     private List<File> sortedFiles = new ArrayList<>();
     private final String FILE_PREFIX = UUID.randomUUID().toString();
     private File tempFolderDirectory = new File("/mnt1/tmp");
+    private List<ObjectOutputStream> allStreams = new ArrayList<>();
 
     private volatile State state = State.ADDING_DOCS;
     private Semaphore semaphore = new Semaphore(1);
@@ -75,7 +76,7 @@ public class DataDeduper<T extends Comparable & Serializable> {
             }
         }
         byte[] docInBytes = encoderDecoder.toByteArray(t);
-        int bucket = (Arrays.hashCode(docInBytes) % PRIME) % 31;
+        int bucket = Math.abs((Arrays.hashCode(docInBytes) % PRIME) % 31);
         Set<byte[]> docsSet = null;
         docsSet = hashCodeVsBytesMap.get(bucket);
         if (docsSet == null) {
@@ -85,7 +86,7 @@ public class DataDeduper<T extends Comparable & Serializable> {
                 docsSet = existingDocsSet;
             }
         }
-        if (docsSet.contains(docInBytes)) {
+        if (!docsSet.contains(docInBytes)) {
             docsSet.add(docInBytes);
             this.totalDocs.incrementAndGet();
         }
@@ -96,9 +97,6 @@ public class DataDeduper<T extends Comparable & Serializable> {
             throw new IllegalStateException("complete is called");
         }
         state = State.COMPLETED;
-        if (hashCodeVsBytesMap.isEmpty()) {
-            return;
-        }
         flushDocsToFiles();
         try {
             sortDocsInFiles();
@@ -205,7 +203,7 @@ public class DataDeduper<T extends Comparable & Serializable> {
                         docs.add(t);
                     } while (bytes != null);
                 }
-                try (ObjectOutputStream objectOutputStream = getObjectOutputStreamInternal(file)) {
+                try (ObjectOutputStream objectOutputStream = getObjectOutputStreamInternal(file, false)) {
                     for (T doc : docs) {
                         objectOutputStream.write(encoderDecoder.toByteArray(doc));
                     }
@@ -216,8 +214,9 @@ public class DataDeduper<T extends Comparable & Serializable> {
         _createUnifiedSortedDocs();
     }
 
-    private ObjectOutputStream getObjectOutputStreamInternal(File file) throws IOException {
-        return new ObjectOutputStream(new BufferedOutputStream(new FileOutputStream(file)));
+    private ObjectOutputStream getObjectOutputStreamInternal(File file, boolean returnAppending) throws IOException {
+        return returnAppending ? new AppendingOutputStream(new ObjectOutputStream(new BufferedOutputStream(new FileOutputStream(file)))) :
+                new ObjectOutputStream(new BufferedOutputStream(new FileOutputStream(file)));
     }
 
     private ObjectInputStream getObjectInputStreamInternal(File file) throws IOException {
@@ -229,7 +228,7 @@ public class DataDeduper<T extends Comparable & Serializable> {
             File outFile = createTempFile(FILE_PREFIX + "_" + entry.getKey() + "_sorted");
             sortedFiles.add(outFile);
             long docsInserted = 0;
-            try (ObjectOutputStream objectOutputStream = getObjectOutputStreamInternal(outFile)) {
+            try (ObjectOutputStream objectOutputStream = getObjectOutputStreamInternal(outFile, false)) {
                 Deque<File> files = entry.getValue();
                 List<ObjectInputStream> objectInputStreams = DedupUtils.transformToList(files, new Transformer<File, ObjectInputStream>() {
                     @Override
@@ -295,6 +294,7 @@ public class DataDeduper<T extends Comparable & Serializable> {
                     totalDocs = 0L;
                 }
                 try (ObjectOutputStream objectOutputStream = getObjectOutputStream(entry.getKey(), fileName, totalDocs)) {
+                    totalDocs = docsPerFile.get(fileIndex);
                     for (byte[] objectInBytes : objectInBytesSet) {
                         objectOutputStream.write(objectInBytes);
                         totalDocs++;
@@ -325,15 +325,17 @@ public class DataDeduper<T extends Comparable & Serializable> {
             file = createTempFile(fileName + "_" + fileIndex);
             files = new ArrayDeque<>();
             files.add(file);
+            docsPerFile.put(index % maxFiles, 0L);
             filesMap.put(fileIndex, files);
         } else if (totalDocs > LIMIT) {
             fileExists = false;
             file = createTempFile(fileName + "_" + fileIndex + "_" + files.size());
+            docsPerFile.put(index % maxFiles, 0L);
             files.add(file);
         } else {
             file = files.getLast();
         }
-        return fileExists ? new AppendingOutputStream(new BufferedOutputStream(new FileOutputStream(file))) : getObjectOutputStreamInternal(file);
+        return getObjectOutputStreamInternal(file, fileExists);
     }
 
     private void cleanUpResourcesInternal(boolean deleteSortedFiles) {
