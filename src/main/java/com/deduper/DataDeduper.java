@@ -33,12 +33,21 @@ public class DataDeduper<T extends Comparable & Serializable> {
     private volatile State state = State.ADDING_DOCS;
     private Map<Integer, Deque<File>> filesMap = new HashMap<>();
     private Map<Integer, Long> docsPerFile = new HashMap<>();
-    private File tempFolderDirectory = new File("/mnt1/tmp");
     private List<File> sortedFiles = new ArrayList<>();
-    private int maxFiles = 10;
+    private final File tempFolderDirectory;
+    private final int maxFiles;
 
     public DataDeduper(ByteEncoderDecoder<T> byteEncoderDecoder) {
         this.encoderDecoder = byteEncoderDecoder;
+        int nFiles = Integer.parseInt(System.getProperty("deduper.maxFiles", "10"));
+        if (nFiles < 1) {
+            throw new IllegalArgumentException("number of files cannot be less than 1");
+        }
+        this.maxFiles = nFiles > 1 ? nFiles / 2 : nFiles;
+        tempFolderDirectory = new File(System.getProperty("/mnt1/tmp", "deduper.tempfiles.directory"));
+        if (!tempFolderDirectory.isDirectory()) {
+            throw new IllegalStateException("tempFilesFolder is not a directory");
+        }
     }
 
     public DataDeduper(ByteEncoderDecoder<T> byteEncoderDecoder, int maxFiles) {
@@ -47,6 +56,10 @@ public class DataDeduper<T extends Comparable & Serializable> {
         }
         this.maxFiles = maxFiles > 1 ? maxFiles / 2 : maxFiles;
         this.encoderDecoder = byteEncoderDecoder;
+        tempFolderDirectory = new File(System.getProperty("/mnt1/tmp", "deduper.tempfiles.directory"));
+        if (!tempFolderDirectory.isDirectory()) {
+            throw new IllegalStateException("tempFilesFolder is not a directory");
+        }
     }
 
     public DataDeduper(ByteEncoderDecoder<T> byteEncoderDecoder, int maxFiles, String tempFilesFolder) {
@@ -56,6 +69,19 @@ public class DataDeduper<T extends Comparable & Serializable> {
         this.maxFiles = maxFiles > 1 ? maxFiles / 2 : maxFiles;
         this.encoderDecoder = byteEncoderDecoder;
         tempFolderDirectory = new File(tempFilesFolder);
+        if (!tempFolderDirectory.isDirectory()) {
+            throw new IllegalStateException("tempFilesFolder is not a directory");
+        }
+    }
+
+    public DataDeduper() {
+        this.encoderDecoder = new DefaultEncoderDecoder();
+        int nFiles = Integer.parseInt(System.getProperty("deduper.maxFiles", "10"));
+        if (nFiles < 1) {
+            throw new IllegalArgumentException("number of files cannot be less than 1");
+        }
+        this.maxFiles = nFiles > 1 ? nFiles / 2 : nFiles;
+        tempFolderDirectory = new File(System.getProperty("/mnt1/tmp", "deduper.tempfiles.directory"));
         if (!tempFolderDirectory.isDirectory()) {
             throw new IllegalStateException("tempFilesFolder is not a directory");
         }
@@ -184,7 +210,7 @@ public class DataDeduper<T extends Comparable & Serializable> {
                     }
                     try {
                         //noinspection unchecked
-                        objects.add((T) objectInputStream.readObject());
+                        objects.add(encoderDecoder.fromByte((byte[]) objectInputStream.readObject()));
                     } catch (EOFException e) {
                         currentFileIndex++;
                         initInputStream();
@@ -193,6 +219,36 @@ public class DataDeduper<T extends Comparable & Serializable> {
                 } while (++docsAdded < batchSize);
                 LOG.error("docs added into batch : " + docsAdded);
             } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        }
+    }
+
+    private class DefaultEncoderDecoder implements ByteEncoderDecoder<T> {
+
+        public DefaultEncoderDecoder() {
+        }
+
+        @Override
+        public byte[] toByteArray(T obj) {
+            try (ByteArrayOutputStream byteArrayOutputStream = new ByteArrayOutputStream();
+                 ObjectOutputStream objectOutputStream = new ObjectOutputStream(byteArrayOutputStream)) {
+                objectOutputStream.writeObject(obj);
+                return byteArrayOutputStream.toByteArray();
+            } catch (IOException e) {
+                throw new RuntimeException(e);
+            }
+        }
+
+        @Override
+        public T fromByte(byte[] bytes) {
+            try {
+                try (ByteArrayInputStream byteArrayInputStream = new ByteArrayInputStream(bytes);
+                     ObjectInputStream objectInputStream = new ObjectInputStream(byteArrayInputStream)) {
+                    //noinspection unchecked
+                    return (T) objectInputStream.readObject();
+                }
+            } catch (IOException | ClassNotFoundException e) {
                 throw new RuntimeException(e);
             }
         }
@@ -212,7 +268,7 @@ public class DataDeduper<T extends Comparable & Serializable> {
                     T t;
                     try {
                         //noinspection unchecked
-                        while ((t = (T) objectInputStream.readObject()) != null) {
+                        while ((t = encoderDecoder.fromByte((byte[]) objectInputStream.readObject())) != null) {
                             docs.add(t);
                         }
                     } catch (EOFException e) {
@@ -221,7 +277,7 @@ public class DataDeduper<T extends Comparable & Serializable> {
                 }
                 try (ObjectOutputStream objectOutputStream = getObjectOutputStreamInternal(file, false)) {
                     for (T doc : docs) {
-                        objectOutputStream.writeObject(doc);
+                        objectOutputStream.writeObject(encoderDecoder.toByteArray(doc));
                     }
                     objectOutputStream.flush();
                     objectOutputStream.reset();
@@ -265,7 +321,7 @@ public class DataDeduper<T extends Comparable & Serializable> {
             while (!docsMap.isEmpty()) {
                 T firstDoc = docsMap.keySet().iterator().next();
                 int fileIndex = docsMap.remove(firstDoc);
-                objectOutputStream.writeObject(firstDoc);
+                objectOutputStream.writeObject(encoderDecoder.toByteArray(firstDoc));
                 docsInserted++;
                 getNextDoc(docsMap, fileIndex, objectInputStreams.get(fileIndex));
             }
@@ -281,7 +337,7 @@ public class DataDeduper<T extends Comparable & Serializable> {
         do {
             try {
                 //noinspection unchecked
-                doc = (T) objectInputStream.readObject();
+                doc = encoderDecoder.fromByte((byte[]) objectInputStream.readObject());
             } catch (EOFException e) {
                 return;
             }
@@ -314,7 +370,7 @@ public class DataDeduper<T extends Comparable & Serializable> {
                 ObjectOutputStream objectOutputStream = getObjectOutputStream(entry.getKey(), fileName, totalDocs);
                 totalDocs = docsPerFile.get(fileIndex);
                 for (byte[] objectInBytes : objectInBytesSet) {
-                    objectOutputStream.writeObject(encoderDecoder.fromByte(objectInBytes));
+                    objectOutputStream.writeObject(objectInBytes);
                     totalDocs++;
                 }
                 objectOutputStream.flush();
