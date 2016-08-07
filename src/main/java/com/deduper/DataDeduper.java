@@ -4,6 +4,7 @@ import com.deduper.encoderdecoder.ByteEncoderDecoder;
 import com.deduper.logger.LoggerFactory;
 import com.deduper.utils.DedupUtils;
 import com.deduper.utils.Transformer;
+import com.deduper.wrapper.ByteArrayWrapper;
 import org.slf4j.Logger;
 
 import java.io.*;
@@ -24,7 +25,7 @@ public class DataDeduper<T extends Comparable & Serializable> {
     public static final String SUFFIX = ".dedup";
     public static final Logger LOG = LoggerFactory.getLogger(DataDeduper.class);
 
-    private final ConcurrentHashMap<Integer, Set<byte[]>> hashCodeVsBytesMap = new ConcurrentHashMap<>(SIZE);
+    private final ConcurrentHashMap<Integer, Set<ByteArrayWrapper<T>>> hashCodeVsBytesMap = new ConcurrentHashMap<>(SIZE);
     private final AtomicInteger totalDocs = new AtomicInteger(0);
     private final ByteEncoderDecoder<T> encoderDecoder;
     private final String FILE_PREFIX = UUID.randomUUID().toString();
@@ -112,18 +113,19 @@ public class DataDeduper<T extends Comparable & Serializable> {
             }
         }
         byte[] docInBytes = encoderDecoder.toByteArray(t);
+        ByteArrayWrapper<T> byteArrayWrapper = new ByteArrayWrapper.ByteArrayWrapperBuilder<T>().bytes(docInBytes).encoderDecoder(encoderDecoder).build();
         int bucket = Math.abs((Arrays.hashCode(docInBytes) % PRIME) % 31);
-        Set<byte[]> docsSet = null;
+        Set<ByteArrayWrapper<T>> docsSet = null;
         docsSet = hashCodeVsBytesMap.get(bucket);
         if (docsSet == null) {
             docsSet = new HashSet<>();
-            Set<byte[]> existingDocsSet = hashCodeVsBytesMap.putIfAbsent(bucket, docsSet);
+            Set<ByteArrayWrapper<T>> existingDocsSet = hashCodeVsBytesMap.putIfAbsent(bucket, docsSet);
             if (existingDocsSet != null) {
                 docsSet = existingDocsSet;
             }
         }
-        if (!docsSet.contains(docInBytes)) {
-            docsSet.add(docInBytes);
+        if (!docsSet.contains(byteArrayWrapper)) {
+            docsSet.add(byteArrayWrapper);
             this.totalDocs.incrementAndGet();
         }
     }
@@ -356,8 +358,8 @@ public class DataDeduper<T extends Comparable & Serializable> {
 
     private void flushDocsToFiles() {
         String fileName = FILE_PREFIX + "_";
-        for (Map.Entry<Integer, Set<byte[]>> entry : hashCodeVsBytesMap.entrySet()) {
-            Set<byte[]> objectInBytesSet = entry.getValue();
+        for (Map.Entry<Integer, Set<ByteArrayWrapper<T>>> entry : hashCodeVsBytesMap.entrySet()) {
+            Set<ByteArrayWrapper<T>> objectInBytesSet = entry.getValue();
             if (objectInBytesSet == null || objectInBytesSet.isEmpty()) {
                 continue;
             }
@@ -369,8 +371,8 @@ public class DataDeduper<T extends Comparable & Serializable> {
                 }
                 ObjectOutputStream objectOutputStream = getObjectOutputStream(entry.getKey(), fileName, totalDocs);
                 totalDocs = docsPerFile.get(fileIndex);
-                for (byte[] objectInBytes : objectInBytesSet) {
-                    objectOutputStream.writeObject(objectInBytes);
+                for (ByteArrayWrapper<T> wrappedObject : objectInBytesSet) {
+                    objectOutputStream.writeObject(wrappedObject.getBytes());
                     totalDocs++;
                 }
                 objectOutputStream.flush();
